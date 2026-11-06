@@ -15,13 +15,13 @@ billion-context 这类插件解决的是「原地压缩」，压缩会丢细节�
 ## 装
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:<你的用户名>/dsh-auto-successor
+& "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd" plugin --profile desktop add github:rodrequezsaievade764-rgb/dsh-auto-successor
 ```
 
 Linux / Docker：
 
 ```bash
-dsh plugin --profile <profile> add github:<你的用户名>/dsh-auto-successor
+dsh plugin --profile <profile> add github:rodrequezsaievade764-rgb/dsh-auto-successor
 ```
 
 装好后重启 DSH，左侧栏「自动化任务」下面会出现 **自动接力**。
