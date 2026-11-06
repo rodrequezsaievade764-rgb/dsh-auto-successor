@@ -1,0 +1,31 @@
+{
+  "name": "dsh-auto-successor",
+  "version": "0.1.0",
+  "description": "自动接力：DSH 会话水位超阈值时自动开新会话——AI 先把当前任务状态摘要成交接稿，写进新会话首条消息，旧会话归档。长会话永不断档。",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "src/host.js",
+  "exports": {
+    ".": "./src/host.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["slots"],
+      "external": ["react"]
+    }
+  },
+  "keywords": ["deepseek-harness", "dsh-plugin", "context", "handoff", "successor"],
+  "files": ["src", "client", "cordis.patch.yml", "README.md", "LICENSE", "CHANGELOG.md"],
+  "engines": { "node": ">=22.13.0" }
+}

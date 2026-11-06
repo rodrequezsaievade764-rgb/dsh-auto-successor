@@ -1,0 +1,7 @@
+# 自动接力（dsh-auto-successor）—— DSH bundle 挂载声明
+#
+# 插件本体：宿主半边 src/host.js（水位监控 / 接力执行 / 面板 API / 全局工具）
+#           网页半边 client/client.js（侧栏「自动接力」入口 + 面板）
+- insert:
+    - id: auto-successor
+      name: dsh-auto-successor
