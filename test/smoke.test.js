@@ -81,3 +81,55 @@ test('successor_status 工具可执行', async () => {
   assert.equal(r.ok, true)
   assert.ok(Array.isArray(r.sessions))
 })
+
+// 宿主对工具的校验：output 里必须同时有 schema 与 render，缺一个就 warn 级拒收。
+// 这种失败最阴——插件加载成功、日志只有一行警告，工具一个都调不到。
+test('每个工具都声明 output.schema 与 output.render（宿主拒收的形状）', () => {
+  const ctx = makeCtx()
+  host.apply(ctx)
+  assert.ok(ctx.__.tools.length >= 2)
+  for (const t of ctx.__.tools) {
+    assert.ok(t.output && typeof t.output === 'object', `${t.name} 缺 output`)
+    assert.equal(typeof t.output.schema, 'object', `${t.name} 的 output.schema 不是对象`)
+    assert.equal(typeof t.output.render, 'function', `${t.name} 的 output.render 不是函数`)
+  }
+})
+
+test('工具的 render 返回内容块数组，不是裸字符串', async () => {
+  const ctx = makeCtx()
+  host.apply(ctx)
+  for (const t of ctx.__.tools) {
+    const ok = t.output.render({}, { ok: true, sessions: [], enabled: true, thresholdPercent: 85 })
+    assert.ok(Array.isArray(ok), `${t.name} 的 render 没返回数组`)
+    assert.equal(ok[0].type, 'text')
+    assert.equal(typeof ok[0].text, 'string')
+  }
+})
+
+test('successor_handoff 的 render 会标出失败与降级', () => {
+  const ctx = makeCtx()
+  host.apply(ctx)
+  const t = ctx.__.tools.find((x) => x.name === 'successor_handoff')
+  assert.match(t.output.render({}, { ok: false, message: '炸了' })[0].text, /✗/)
+  assert.match(t.output.render({}, { ok: true, sessionId: 's-1' })[0].text, /s-1/)
+  assert.match(t.output.render({}, { ok: true, degraded: true })[0].text, /降级/)
+})
+
+test('logger 是工厂函数时也能取到（cordis 的实际形态）', () => {
+  const made = []
+  const ctx = makeCtx()
+  const lines = []
+  ctx.logger = (name) => {
+    made.push(name)
+    return { info: (m) => lines.push(m), warn: () => {}, debug: () => {} }
+  }
+  assert.doesNotThrow(() => host.apply(ctx))
+  assert.ok(made.length > 0, '应当用插件名调用工厂')
+  assert.ok(lines.some((l) => l.includes('就绪')), '应当走到 log.info')
+})
+
+test('logger 缺失时回落到 console，不炸', () => {
+  const ctx = makeCtx()
+  delete ctx.logger
+  assert.doesNotThrow(() => host.apply(ctx))
+})

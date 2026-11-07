@@ -212,6 +212,8 @@ export function apply(ctx) {
   })
 
   // ---------- 全局工具 ----------
+  // 宿主要求每个工具的 output 里同时有 schema 与 render，缺一个就 warn 级拒收：
+  // 插件照常加载，工具却一个都调不到。render 返回内容块数组，不是裸字符串。
   ctx.effect(() => ctx.tools.register({
     name: 'successor_handoff',
     description: '立即触发「自动接力」：把当前会话（或不填 sessionId 时的调用方会话）摘要成交接稿、开新会话接手、归档旧会话。上下文快满或想换新会话时用。',
@@ -223,6 +225,18 @@ export function apply(ctx) {
       },
       additionalProperties: false,
     },
+    output: {
+      schema: { type: 'object', additionalProperties: true, properties: {} },
+      render: (_args, value) => [
+        {
+          type: 'text',
+          text:
+            value && value.ok === false
+              ? '✗ 接力失败：' + ((value && value.message) || '未知原因')
+              : '✓ 已接力' + (value && value.sessionId ? ' → ' + value.sessionId : '') + (value && value.degraded ? '（降级交接稿）' : ''),
+        },
+      ],
+    },
     async execute(args) {
       return handoffNow(args?.sessionId, { reason: args?.reason || '工具触发' })
     },
@@ -232,13 +246,41 @@ export function apply(ctx) {
     name: 'successor_status',
     description: '看「自动接力」的状态：各会话上下文水位、轮数、最近接力记录。',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
+    output: {
+      schema: { type: 'object', additionalProperties: true, properties: {} },
+      render: (_args, value) => {
+        const v = value || {}
+        const lines = [
+          (v.enabled === false ? '自动接力：关' : '自动接力：开') +
+            (v.thresholdPercent != null ? '，阈值 ' + v.thresholdPercent + '%' : ''),
+        ]
+        const list = Array.isArray(v.sessions) ? v.sessions : []
+        if (!list.length) lines.push('还没有观测到活跃会话')
+        for (const s of list) {
+          lines.push(
+            '- ' + (s.title || '(无标题)') + '：' + (s.percent == null ? '测不到' : s.percent + '%') +
+              (s.turns != null ? '，' + s.turns + ' 轮' : '') +
+              (s.chainDepth ? '，第 ' + s.chainDepth + ' 代接力' : '') +
+              (s.handing ? '，接力中' : ''),
+          )
+        }
+        if (v.lastHandoffAt) lines.push('上次接力：' + new Date(v.lastHandoffAt).toLocaleString())
+        return [{ type: 'text', text: lines.join('\n') }]
+      },
+    },
     async execute() {
       const sessions = watcher.snapshot().slice(0, 15)
       return {
         ok: true,
         enabled: cfg.enabled,
         thresholdPercent: cfg.thresholdPercent,
-        sessions: sessions.map((s) => ({ title: s.title, percent: s.percent, turns: s.turns, handing: s.handing })),
+        sessions: sessions.map((s) => ({
+          title: s.title,
+          percent: s.percent,
+          turns: s.turns,
+          handing: s.handing,
+          chainDepth: s.chainDepth,
+        })),
         lastHandoffAt: watcher.state.lastHandoffAt || null,
       }
     },
