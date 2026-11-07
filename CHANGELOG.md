@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 0.2.1
+
+**两个工具从来没在真实宿主里挂上过。**
+
+宿主对工具的校验是 `output` 里必须同时有 `schema` 与 `render`，缺一个就拒收，且只报 warn 级：
+
+```
+warn auto-successor: 工具 successor_handoff 挂不上：
+tool "successor_handoff" must declare output { schema, render, presentationMeta? }
+```
+
+插件照常加载、启动日志一切正常，但 `successor_handoff` / `successor_status` 一个都调不到。0.2.0 的单元测试用自建替身，所以全绿也没发现。
+
+- 两个工具都补上 `output.schema` 与 `output.render`，render 返回内容块数组而不是裸字符串。
+- `successor_status` 的 render 把会话列表、接力层数、上次接力时间排成人看的文本；execute 补回 `chainDepth` 字段。
+- 测试加三条锁住工具形状（形状不对就红），另加两条 logger 形态用例：工厂函数形态要按插件名调用、完全没有 logger 时要回落 console。28 → 33 个用例。
+
 ## 0.2.0
 
 一轮以「静默失效」为目标的清理。这一版没有加花活，修的全是「看起来能用、其实没生效」的地方。

@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-successor",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "自动接力：DSH 会话水位超阈值时自动开新会话——AI 先把当前任务状态摘要成交接稿，写进新会话首条消息，旧会话归档。长会话永不断档。",
   "license": "MIT",
   "private": true,

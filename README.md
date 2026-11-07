@@ -110,7 +110,7 @@ dsh plugin --profile <profile> add github:rodrequezsaievade764-rgb/dsh-auto-succ
 npm test
 ```
 
-28 个用例：纯函数单测（水位判断 / 文本提取 / 轮数估算 / 接力链 / 提示词结构 / 配置校验）+ 端到端 mock 全链路（自动触发、降级、手动、冷静期、排除、接力链上限、两种 seedMode、轮数估算、快照）。全程离线。
+33 个用例：纯函数单测（水位判断 / 文本提取 / 轮数估算 / 接力链 / 提示词结构 / 配置校验）+ 端到端 mock 全链路（自动触发、降级、手动、冷静期、排除、接力链上限、两种 seedMode、轮数估算、快照）。全程离线。
 
 ## License
 
