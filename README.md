@@ -50,9 +50,14 @@ dsh plugin --profile <profile> add github:rodrequezsaievade764-rgb/dsh-auto-succ
 | 冷静期 | 10 分钟 | 接力后这段时间内不再自动接力，防连环接力打爆 |
 | 兜底上下文窗口 | 128000 | 拿不到模型窗口元数据时按这个算 |
 | 交接后归档 | 开 | 关了只建新会话，旧的留着 |
+| 接力链上限 | 3 代 | 「接力 · 接力 · …」套到这一层就停自动接力，防套娃；手动仍可触发 |
 | 排除标题 | 空 | 正则，一行一条；命中的会话不自动接力 |
 
 **建议排除的会话**：QQ 机器人会话、后台任务会话这类「每句话都是一轮」的，水位涨得快但没有接力价值。填 `^QQ ` 就行。
+
+**接力链为什么要设上限**：接力出来的是新会话，新会话水位涨满又会接力，于是标题变成「接力 · 接力 · 接力 · X」。三五层之后基本可以断定接力没解决问题——是任务本身失控，或者阈值调太低。到上限只停自动接力，不挡你手动点。标题也不会滚雪球：每次只保留一层前缀，不会是「接力 · 接力 · 接力」。
+
+**交接稿怎么投递**：默认走 `followup`，交接稿作为新会话第一条消息跑一轮，好处是耐重启；`seedMode` 设成 `system-prompt` 就挂到系统提示词侧，省掉「已接上」那一轮空转。宿主没有对应接口时自动回落 followup，日志里写明降级原因。
 
 ## 交接稿长什么样
 
@@ -84,10 +89,11 @@ dsh plugin --profile <profile> add github:rodrequezsaievade764-rgb/dsh-auto-succ
 | 方面 | 做法 |
 |---|---|
 | 触发时机 | 监听 `session/event` 的 `turn/end`，只在 `reason.kind === 'completed'` 的正常结束时判断，半途而废的轮次不算 |
-| 水位测量 | 宿主 `tokenMeter.measure(session)` 取 token，除以上下文窗口；拿不到就标「测不到」不瞎猜 |
+| 水位测量 | 宿主 `tokenMeter.measure(session)` 取 token，除以上下文窗口；窗口优先取测量值自带，其次会话当前模型元数据，最后兜底配置值；全拿不到就标「测不到」不瞎猜 |
 | 交接稿生成 | 宿主 `llm.stream` 直连，不进会话（不污染任何上下文）；只取最近 40 条、每条截 1500 字 |
-| 新会话 | 走 `sessionController.create`（同工作区、同 preset），`rename` 成「接力 · 原标题」 |
-| 交接稿投递 | `agent.followup` 带 `source: { kind: 'plugin' }`，明确标成插件消息 |
+| 新会话 | 走 `sessionController.create`（同工作区、同 preset），`rename` 成「接力 · 原标题」（只保留一层前缀） |
+| 交接稿投递 | 默认 `agent.followup` 带 `source: { kind: 'plugin' }`；`seedMode=system-prompt` 时挂系统提示词侧，宿主不支持则回落 |
+| 轮数来源 | 优先用进程内实际观察到的轮数；进程重启后拿不到就按对话条数估算，不会往交接稿里写「约 0 轮」 |
 | 归档 | `workspaceRegistry.archiveSession`，失败只记日志不影响接力结果 |
 | 热生效 | 改规则原地覆盖 cfg 字段，watcher 与工具闭包共享同一引用，不用重启 |
 
@@ -95,6 +101,7 @@ dsh plugin --profile <profile> add github:rodrequezsaievade764-rgb/dsh-auto-succ
 
 - 需要 DSH 有 `tokenMeter`、`sessionController`、`workspaceRegistry` 三个服务（桌面版 / Web 组合都有）。缺哪个就在日志里说清楚，不静默失败。
 - 冷静期是全局的，不是按会话：接力一次后，所有会话都等冷静期过去。这是故意的——连环接力比不接力更糟。
+- 接力链上限按标题前缀算。手动改过标题的会话，层数会被重置为 0。
 - 交接稿质量取决于摘要模型。用小模型（如 Flash）也够，但换大模型细节更多。
 
 ## 测试
@@ -103,7 +110,7 @@ dsh plugin --profile <profile> add github:rodrequezsaievade764-rgb/dsh-auto-succ
 npm test
 ```
 
-20 个用例：纯函数单测（水位判断 / 文本提取 / 提示词结构 / 配置校验）+ 端到端 mock 全链路（自动触发、降级、手动、冷静期、排除、快照）。全程离线。
+28 个用例：纯函数单测（水位判断 / 文本提取 / 轮数估算 / 接力链 / 提示词结构 / 配置校验）+ 端到端 mock 全链路（自动触发、降级、手动、冷静期、排除、接力链上限、两种 seedMode、轮数估算、快照）。全程离线。
 
 ## License
 

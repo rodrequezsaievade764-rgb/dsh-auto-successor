@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   extractText, extractTokens, extractContextWindow, percentOf,
   shouldHandoff, isExcluded, buildSummaryUser, buildSeedText, fallbackBrief,
+  estimateTurns, handoffChainDepth, nextHandoffTitle,
 } from '../src/core.js'
 import { mergeConfig, validateConfig, DEFAULT_CONFIG } from '../src/config.js'
 
@@ -93,10 +94,46 @@ test('mergeConfig 深合并', () => {
 })
 
 test('validateConfig 拦非法值', () => {
-  const ok = { thresholdPercent: 85, minTurns: 6, cooldownMinutes: 10, defaultContextWindow: 128000, seedMode: 'followup', excludeTitleRegex: [] }
+  const ok = { thresholdPercent: 85, minTurns: 6, cooldownMinutes: 10, defaultContextWindow: 128000, seedMode: 'followup', maxChainDepth: 3, excludeTitleRegex: [] }
   assert.equal(validateConfig(ok), '')
   assert.notEqual(validateConfig({ ...ok, thresholdPercent: 200 }), '')
   assert.notEqual(validateConfig({ ...ok, seedMode: 'nope' }), '')
   assert.notEqual(validateConfig({ ...ok, excludeTitleRegex: ['['] }), '')
   assert.equal(validateConfig({ ...ok, excludeTitleRegex: ['^QQ '] }), '')
+  // 新增的防套娃上限也要校验
+  assert.notEqual(validateConfig({ ...ok, maxChainDepth: 0 }), '')
+  assert.notEqual(validateConfig({ ...ok, maxChainDepth: 99 }), '')
+  assert.notEqual(validateConfig({ ...ok, maxChainDepth: 2.5 }), '')
+  assert.equal(validateConfig({ ...ok, maxChainDepth: 5 }), '')
+})
+
+test('estimateTurns：按对话条数估轮数，绝不给 0', () => {
+  assert.equal(estimateTurns([]), 0)
+  assert.equal(estimateTurns(null), 0)
+  // 一问一答算一轮
+  assert.equal(estimateTurns([{ role: 'user' }, { role: 'assistant' }]), 1)
+  assert.equal(estimateTurns(Array.from({ length: 10 }, () => ({}))), 5)
+  // 只有一条也算 1 轮：写成「约 0 轮」比不准更误导
+  assert.equal(estimateTurns([{ role: 'user' }]), 1)
+})
+
+test('handoffChainDepth：数标题里的接力层数', () => {
+  assert.equal(handoffChainDepth('写个爬虫'), 0)
+  assert.equal(handoffChainDepth('接力 · 写个爬虫'), 1)
+  assert.equal(handoffChainDepth('接力 · 接力 · 写个爬虫'), 2)
+  assert.equal(handoffChainDepth(''), 0)
+  assert.equal(handoffChainDepth(null), 0)
+})
+
+test('nextHandoffTitle：剥掉旧前缀再加一层，不滚雪球', () => {
+  assert.equal(nextHandoffTitle('写个爬虫'), '接力 · 写个爬虫')
+  assert.equal(nextHandoffTitle('接力 · 写个爬虫'), '接力 · 写个爬虫')
+  assert.equal(nextHandoffTitle('接力 · 接力 · 接力 · 写个爬虫'), '接力 · 写个爬虫')
+  // 空标题要有兜底
+  assert.equal(nextHandoffTitle(''), '接力 · 会话')
+  assert.equal(nextHandoffTitle('接力 · '), '接力 · 会话')
+  // 60 字上限，且是剥完前缀再截
+  const long = nextHandoffTitle('长'.repeat(100))
+  assert.equal(long.length, 60)
+  assert.ok(long.startsWith('接力 · 长'))
 })

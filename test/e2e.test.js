@@ -24,6 +24,7 @@ function makeDsh({ llmText = '## 任务背景\n在写爬虫，文件在 src/spid
   const archived = []
   const created = []
   const seeds = []
+  const prompts = []
   let idSeq = 0
   return {
     agents: { get: (id) => agents.get(String(id)) },
@@ -33,7 +34,9 @@ function makeDsh({ llmText = '## 任务背景\n在写爬虫，文件在 src/spid
       if (name === 'tokenMeter') return { measure: (session) => session.__tokens != null ? { tokens: session.__tokens } : null }
       if (name === 'llm') {
         return {
-          stream: async function* () {
+          stream: async function* (params) {
+            // 记下送进模型的提示词，测试用来核对「轮数估算」这类元信息真的带上了
+            prompts.push(String(params?.messages?.[0]?.content?.[0]?.text || ''))
             yield { type: 'text-delta', text: llmText }
             yield { type: 'finish', reason: { kind: 'stop' } }
           },
@@ -62,7 +65,7 @@ function makeDsh({ llmText = '## 任务背景\n在写爬虫，文件在 src/spid
       }
       return undefined
     },
-    __state: { agents, sessions, archived, created, seeds },
+    __state: { agents, sessions, archived, created, seeds, prompts },
   }
 
   function makeAgent(sessionId) {
@@ -219,4 +222,82 @@ test('端到端：snapshot 汇总各会话水位', async () => {
   const s1 = snap.find((x) => x.sessionId === 's1')
   assert.equal(s1.percent, 80)
   assert.equal(s1.tokens, 800)
+})
+
+test('端到端：标题接力层数到上限就停自动接力（防套娃）', async () => {
+  const dsh = makeDsh()
+  const handles = makeHandles(dsh)
+  const cfgX = mergeConfig(cfg, { maxChainDepth: 2 })
+  const watcher = createWatcher({ dsh, cfg: cfgX, handles, log: { info: () => {}, warn: () => {} } })
+  const session = makeSession('session-chain', 990)
+  session.title = '接力 · 接力 · 长任务'
+  dsh.__state.sessions.set('session-chain', session)
+  makeEvents(session)
+  await watcher.onTurnEnd(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await watcher.onTurnEnd(session, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  assert.equal(dsh.__state.created.length, 0, '第 2 代到上限，不该再自动接力')
+
+  // 快照要能看出层数，面板才好解释为什么不动
+  const s = watcher.snapshot().find((x) => x.sessionId === 'session-chain')
+  assert.equal(s.chainDepth, 2)
+})
+
+test('端到端：接力出来的标题只留一层前缀，不滚雪球', async () => {
+  const dsh = makeDsh()
+  const handles = makeHandles(dsh)
+  const session = makeEvents(makeSession('session-title', 900))
+  dsh.__state.sessions.set('session-title', session)
+  session.title = '接力 · 接力 · 接力 · 老任务'
+  const r = await handoff(handles, dsh, cfg, { session, reason: '测试', percent: 90, title: session.title, turns: 9 })
+  assert.equal(r.ok, true)
+  assert.equal(sessionsTitle(dsh, r.newSessionId), '接力 · 老任务')
+})
+
+test('端到端：seedMode=system-prompt 时挂系统提示词、不消耗一轮 followup', async () => {
+  const dsh = makeDsh()
+  const handles = makeHandles(dsh)
+  // 给 mock agent 加 setSystemPromptAppend 能力
+  const origResolve = handles.resolveAgent
+  handles.resolveAgent = async (sid) => {
+    const a = await origResolve.call(handles, sid)
+    if (a) a.setSystemPromptAppend = async (t) => { a.sysPrompt = t }
+    return a
+  }
+  const session = makeEvents(makeSession('session-sp', 900))
+  dsh.__state.sessions.set('session-sp', session)
+  const cfgSP = mergeConfig(cfg, { seedMode: 'system-prompt' })
+  const r = await handoff(handles, dsh, cfgSP, { session, reason: '测试', percent: 90, title: '测试会话', turns: 9 })
+  assert.equal(r.ok, true)
+  assert.equal(r.seedMode, 'system-prompt')
+  const agent = dsh.__state.agents.get(r.newSessionId)
+  assert.ok(agent.sysPrompt.includes('【会话接力】'), '系统提示词里要有交接稿')
+  assert.equal(dsh.__state.seeds.filter((s) => s.sessionId === r.newSessionId).length, 0, '不该再走 followup')
+})
+
+test('端到端：seedMode=system-prompt 但宿主不支持 → 回落 followup 且不失败', async () => {
+  const dsh = makeDsh()
+  const handles = makeHandles(dsh)
+  const session = makeEvents(makeSession('session-sp2', 900))
+  dsh.__state.sessions.set('session-sp2', session)
+  const cfgSP = mergeConfig(cfg, { seedMode: 'system-prompt' })
+  const r = await handoff(handles, dsh, cfgSP, { session, reason: '测试', percent: 90, title: '测试会话', turns: 9 })
+  assert.equal(r.ok, true)
+  assert.equal(r.seedMode, 'followup')
+  const seed = dsh.__state.seeds.find((s) => s.sessionId === r.newSessionId)
+  assert.ok(seed, '回落路径仍要把交接稿送到')
+  assert.ok(seed.text.includes('【会话接力】'))
+})
+
+test('端到端：手动接力 turns 未知时按对话条数估算，不写「约 0」', async () => {
+  const dsh = makeDsh()
+  const handles = makeHandles(dsh)
+  const session = makeEvents(makeSession('session-turns', 300)) // 3 条事件
+  dsh.__state.sessions.set('session-turns', session)
+  const r = await handoff(handles, dsh, cfg, { session, reason: '手动', percent: 30, title: '测试', turns: null })
+  assert.equal(r.ok, true)
+  assert.equal(r.turns, 2, '3 条对话 → 约 2 轮')
+  // 交接稿正文由模型生成；轮数写进的是「送给模型的提示词头部」，那里必须带估算值
+  const prompt = dsh.__state.prompts.at(-1) || ''
+  assert.ok(prompt.includes('已完成轮数：约 2'), '提示词里不能写 0 轮')
+  assert.ok(!prompt.includes('已完成轮数：约 0'))
 })

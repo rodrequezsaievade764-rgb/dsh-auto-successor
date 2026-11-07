@@ -18,8 +18,9 @@ export const DEFAULT_CONFIG = {
   minTurns: 6,               // 会话至少跑过几轮才允许自动接力（防误伤新会话）
   cooldownMinutes: 10,       // 接力后新会话的冷静期（防连环接力）
   defaultContextWindow: 128000, // 拿不到模型窗口元数据时的兜底值
-  seedMode: 'followup',      // followup = 交接稿作为首条消息跑一轮（耐重启）；system-prompt = 只挂系统提示词钩子（省一轮）
+  seedMode: 'followup',      // followup = 交接稿作为首条消息跑一轮（耐重启）；system-prompt = 挂系统提示词侧（省一轮，宿主不支持时自动回落 followup）
   autoArchive: true,         // 交接完成后归档旧会话
+  maxChainDepth: 3,          // 「接力 · 接力 · …」最多套几层；到顶就停自动接力（防套娃），手动仍可触发
   model: {},                 // 摘要用的模型 { provider, model }；不填 = DSH 默认模型
   excludeTitleRegex: [],     // 标题命中这些正则的会话不自动接力（字符串数组，如 '^QQ ·'）
 }
@@ -49,6 +50,8 @@ export function validateConfig(cfg) {
   const w = Number(cfg.defaultContextWindow)
   if (!Number.isInteger(w) || w < 4000 || w > 10_000_000) return 'defaultContextWindow 要在 4000-10000000 之间'
   if (cfg.seedMode !== 'followup' && cfg.seedMode !== 'system-prompt') return "seedMode 只支持 'followup' / 'system-prompt'"
+  const d = Number(cfg.maxChainDepth)
+  if (!Number.isInteger(d) || d < 1 || d > 20) return 'maxChainDepth 要在 1-20 之间'
   if (!Array.isArray(cfg.excludeTitleRegex)) return 'excludeTitleRegex 要是字符串数组'
   for (const r of cfg.excludeTitleRegex) {
     try { new RegExp(String(r)) } catch { return `excludeTitleRegex 里有非法正则：${r}` }

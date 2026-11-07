@@ -73,6 +73,51 @@ export function shouldHandoff({ percent, turns = 0, thresholdPercent, minTurns, 
   return { yes: true, why: `水位 ${percent}% ≥ ${thresholdPercent}%` }
 }
 
+/**
+ * 从对话条数粗估轮数。
+ * 一条用户消息 + 一条助手回复 ≈ 一轮，所以按条数一半取整。
+ * 用于「进程重启后 observed 计数丢失、但会话其实跑了很多轮」的场景——
+ * 否则交接稿会写「已完成轮数：约 0」，下一个会话据此误判这是个刚开的会话。
+ */
+export function estimateTurns(entries) {
+  if (!Array.isArray(entries) || !entries.length) return 0
+  return Math.max(1, Math.round(entries.length / 2))
+}
+
+// ---------- 接力链 ----------
+
+// 判前缀用不含尾空格的核心（否则标题正好等于「接力 · 」时剥不掉，会拼出「接力 · 接力 · 」）；
+// 拼标题时再补上尾空格。
+const TITLE_CORE = '接力 ·'
+
+export const HANDOFF_TITLE_PREFIX = TITLE_CORE + ' '
+
+/**
+ * 标题里的接力层数。
+ * 接力出来的会话标题是「接力 · 原标题」，它自己再接力就会变成「接力 · 接力 · 原标题」。
+ * 层数用来挡「接力生接力」无限套娃 —— 一个长任务连环接力五层，说明接力本身没解决问题。
+ */
+export function handoffChainDepth(title) {
+  let t = String(title || '').replace(/\s+/g, ' ').trim()
+  let n = 0
+  while (t.startsWith(TITLE_CORE)) {
+    n += 1
+    t = t.slice(TITLE_CORE.length).trim()
+  }
+  return n
+}
+
+/**
+ * 下一代会话的标题：固定只留一层前缀，不滚雪球。
+ * 60 字截断是宿主的标题上限，先剥前缀再截，防止长前缀把真实标题挤掉。
+ */
+export function nextHandoffTitle(title, { prefix = HANDOFF_TITLE_PREFIX, max = 60 } = {}) {
+  let base = String(title || '').replace(/\s+/g, ' ').trim()
+  while (base.startsWith(TITLE_CORE)) base = base.slice(TITLE_CORE.length).trim()
+  if (!base) base = '会话'
+  return (prefix + base).slice(0, max)
+}
+
 /** 标题是否命中排除正则。 */
 export function isExcluded(title, patterns) {
   const t = String(title || '')

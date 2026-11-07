@@ -1,22 +1,41 @@
 // 自动接力 · 宿主半边：会话事件挂载 + 面板 API + 全局工具 + 服务。
 
 import { join } from 'node:path'
-import { writeFileSync } from 'node:fs'
 import {
   dataDir, loadConfig, mergeConfig, saveConfig,
 } from './config.js'
 import { createWatcher } from './watch.js'
 import { handoff } from './handoff.js'
-import { readLog, appendLog } from './store.js'
+import { readLog, appendLog, saveState } from './store.js'
 import { shouldHandoff } from './core.js'
 
 export const name = 'auto-successor'
-export const inject = ['webServer', 'timer', 'llm', 'sessions', 'agents']
+// timer 不在依赖里：本插件自己用 setTimeout/setInterval，不经过宿主 timer 服务。
+// 少声明一个依赖，就少一种「宿主没这个服务 → apply 干脆不跑」的挂法。
+export const inject = ['webServer', 'llm', 'sessions', 'agents']
 
 const PREFIX = '/auto-successor/api'
 
+/**
+ * 取 logger。
+ * cordis 的 ctx.logger 是工厂函数（ctx.logger(name) → 实例）；测试替身常直接给对象。
+ * 两种形态都要吃，否则 log.info 会 undefined 抛错、整个插件挂不上。
+ */
+export function resolveLogger(ctx, name = 'auto-successor') {
+  const raw = ctx && ctx.logger
+  if (typeof raw === 'function') {
+    try {
+      const made = raw(name)
+      if (made && typeof made.info === 'function') return made
+    } catch {}
+    return console
+  }
+  if (raw && typeof raw.info === 'function') return raw
+  return console
+}
+
 export function apply(ctx) {
-  const log = ctx.logger ?? console
+  const log = resolveLogger(ctx)
   let cfg = loadConfig()
 
   // ---------- 宿主句柄：watch 与 handoff 共用，测试可整包替换 ----------
@@ -100,27 +119,19 @@ export function apply(ctx) {
     try { agent = ctx.agents?.get(target) || ctx.agents?.get('session-' + target) } catch {}
     const m = watcher.snapshot().find((s) => s.sessionId === target)
     await ensureWorkspace()
+    // turns 不传 0：0 会被当成「真的零轮」写进交接稿。传 null 让 handoff 按对话条数估算，
+    // 这样进程重启后的手动接力不会在交接稿里写「已完成轮数：约 0」。
     const r = await handoff(handles, ctx, cfg, {
-      session, agent, reason, percent: m?.percent ?? null, title: m?.title || '', turns: m?.turns || 0,
+      session, agent, reason, percent: m?.percent ?? null, title: m?.title || '', turns: m?.turns || null,
     })
-    appendLog({ kind: 'manual', sessionId: target, title: m?.title || '', percent: m?.percent ?? null, ok: r.ok, message: r.message, newSessionId: r.newSessionId, degraded: r.degraded || false, steps: r.steps })
+    appendLog({ kind: 'manual', sessionId: target, title: m?.title || '', percent: m?.percent ?? null, ok: r.ok, message: r.message, newSessionId: r.newSessionId, degraded: r.degraded || false, turns: r.turns ?? null, seedMode: r.seedMode, steps: r.steps })
     if (r.ok) {
       watcher.state.lastHandoffAt = Date.now()
       watcher.state.lastNewSessionId = r.newSessionId
       watcher.state.cooldownUntil = Date.now() + cfg.cooldownMinutes * 60_000
-      saveStateSafe(watcher.state)
+      saveState(watcher.state)
     }
     return r
-  }
-
-  function saveStateSafe(state) {
-    try {
-      writeFileSync(join(dataDir(), 'state.json'), JSON.stringify({
-        cooldownUntil: state.cooldownUntil,
-        lastHandoffAt: state.lastHandoffAt,
-        lastNewSessionId: state.lastNewSessionId,
-      }, null, 2), 'utf8')
-    } catch {}
   }
 
   function currentSessionOf(ctx) {

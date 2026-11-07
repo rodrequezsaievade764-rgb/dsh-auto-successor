@@ -1,7 +1,7 @@
 // 水位监控：盯所有会话的 turn/end，算水位，到点触发接力。
 // 监控 ≠ 执行：watch 只做判断和节流，真正的接力交给 handoff.js。
 
-import { percentOf, shouldHandoff, isExcluded, extractTokens, extractContextWindow, extractText } from './core.js'
+import { percentOf, shouldHandoff, isExcluded, extractTokens, extractContextWindow, handoffChainDepth } from './core.js'
 import { loadState, saveState, appendLog } from './store.js'
 
 export function createWatcher({ dsh, cfg, handles, log = console }) {
@@ -23,7 +23,12 @@ export function createWatcher({ dsh, cfg, handles, log = console }) {
     return o
   }
 
-  /** 量水位。拿不到 tokenMeter 返回 null。 */
+  /**
+   * 量水位。拿不到 tokenMeter 返回 null。
+   * window 优先取测量值自带的窗口（最准），其次取会话当前模型的元数据缓存，最后兜底配置值。
+   * 早期版本这里有个空 if —— 探测了 agent 当前模型却什么都不做，白拿一次 sel 就扔。现在把
+   * 缓存里的窗口用上：宿主 llm 服务如果已经把模型信息缓存过，同步路径就能直接读到。
+   */
   function measure(session, agent) {
     try {
       const tm = dsh.get?.('tokenMeter') || dsh.tokenMeter
@@ -31,18 +36,20 @@ export function createWatcher({ dsh, cfg, handles, log = console }) {
       const m = tm.measure(session)
       const tokens = extractTokens(m)
       if (!tokens) return null
-      let window = extractContextWindow(m) || cfg.defaultContextWindow
-      // 会话挂着的模型元数据更准
-      try {
-        const sel = agent?.ctx?.model?.current?.()
-        if (sel) {
-          const llm = dsh.get?.('llm') || dsh.llm
-          if (llm?.resolveModelInfo) {
-            // 异步接口在同步路径里用不了：有元数据缓存就吃，没有就用兜底窗口
-          }
-        }
-      } catch {}
+      let window = extractContextWindow(m) || cachedWindowOfModel(agent) || cfg.defaultContextWindow
       return { tokens, window, percent: percentOf(tokens, window) }
+    } catch {
+      return null
+    }
+  }
+
+  /** 从会话当前模型的元数据缓存里同步读上下文窗口。读不到返回 null，绝不抛。 */
+  function cachedWindowOfModel(agent) {
+    try {
+      const sel = agent?.ctx?.model?.current?.()
+      if (!sel) return null
+      // 常见两形：{ contextWindow } 直接给，或 { info: { contextWindow } }
+      return extractContextWindow(sel) || extractContextWindow(sel.info)
     } catch {
       return null
     }
@@ -68,6 +75,16 @@ export function createWatcher({ dsh, cfg, handles, log = console }) {
     if (!cfg.enabled) return
     const title = safeTitle(session)
     if (isExcluded(title, cfg.excludeTitleRegex)) return
+    // 防接力套娃：标题层数到顶就停自动接力，否则长任务会「接力生接力」无限滚下去
+    const depth = handoffChainDepth(title)
+    if (depth >= (cfg.maxChainDepth ?? 3)) {
+      const q = quiet.get(sid)
+      if (!q || Date.now() > q) {
+        quiet.set(sid, Date.now() + 30 * 60_000)
+        log.info(`自动接力：会话 ${sid.slice(-8)} 已是第 ${depth} 代接力，到上限不再自动接（手动仍可）`)
+      }
+      return
+    }
     const decision = shouldHandoff({
       percent: m?.percent ?? null,
       turns: o.turns,
@@ -109,6 +126,7 @@ export function createWatcher({ dsh, cfg, handles, log = console }) {
         message: r.message,
         newSessionId: r.newSessionId,
         degraded: r.degraded || false,
+        seedMode: r.seedMode,
         steps: r.steps,
       })
       if (r.ok) {
@@ -146,6 +164,7 @@ export function createWatcher({ dsh, cfg, handles, log = console }) {
           tokens: m?.tokens ?? null,
           window: m?.window ?? null,
           turns: o?.turns || 0,
+          chainDepth: handoffChainDepth(safeTitle(session)),
           excluded: isExcluded(safeTitle(session), cfg.excludeTitleRegex),
           handing: handing.has(sid),
         })
